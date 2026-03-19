@@ -25,17 +25,29 @@ class AteneaAPI:
         self.formatter = Formatter()
 
     async def handle_status(self, request):
-        has_data = self.vector_store.has_data()
+        collections = self.vector_store.list_collections()
         return web.json_response({
             "status": "ok",
-            "indexed": has_data,
+            "collections": collections,
             "engine": "Atenea Context Engine"
         })
+
+    async def handle_list(self, request):
+        try:
+            collections = self.vector_store.list_collections()
+            return web.json_response({
+                "status": "ok",
+                "collections": collections
+            })
+        except Exception as e:
+            logger.error(f"Error listing collections: {e}")
+            return web.json_response({"error": str(e)}, status=500)
 
     async def handle_index(self, request):
         try:
             data = await request.json()
             files = data.get("files", [])
+            collection_name = data.get("collection")
             
             if not files:
                 return web.json_response({"error": "No files provided"}, status=400)
@@ -65,8 +77,8 @@ class AteneaAPI:
                 async with semaphore:
                     contents = [c.content for c in batch_chunks]
                     embeddings = await self.embedder.embed(contents)
-                    self.vector_store.upsert_chunks(batch_chunks, embeddings)
-                    logger.info(f"Indexed batch {batch_idx + 1} via API...")
+                    self.vector_store.upsert_chunks(batch_chunks, embeddings, collection_name=collection_name)
+                    logger.info(f"Indexed batch {batch_idx + 1} to {collection_name or 'default'} via API...")
 
             batches = [all_chunks[i:i+batch_size] for i in range(0, len(all_chunks), batch_size)]
             tasks = [process_batch(i, batch) for i, batch in enumerate(batches)]
@@ -86,11 +98,12 @@ class AteneaAPI:
             data = await request.json()
             query = data.get("query")
             limit = data.get("limit", 20)
+            collection_name = data.get("collection")
 
             if not query:
                 return web.json_response({"error": "No query provided"}, status=400)
 
-            chunks = await self.retriever.retrieve(query, limit=limit)
+            chunks = await self.retriever.retrieve(query, limit=limit, collection_name=collection_name)
             formatted = self.formatter.format(chunks)
 
             return web.json_response({
@@ -104,8 +117,10 @@ class AteneaAPI:
 
     async def handle_clean(self, request):
         try:
-            self.vector_store.clear_collection()
-            return web.json_response({"status": "ok", "message": "Index cleared"})
+            data = await request.json() if request.has_body else {}
+            collection_name = data.get("collection")
+            self.vector_store.clear_collection(collection_name=collection_name)
+            return web.json_response({"status": "ok", "message": f"Index {collection_name or 'default'} cleared"})
         except Exception as e:
             logger.error(f"Error clearing index: {e}")
             return web.json_response({"error": str(e)}, status=500)
@@ -115,6 +130,7 @@ def main():
     app = web.Application(client_max_size=100 * 1024 * 1024)  # 100MB
     app.add_routes([
         web.get('/api/status', api.handle_status),
+        web.get('/api/list', api.handle_list),
         web.post('/api/index', api.handle_index),
         web.post('/api/query', api.handle_query),
         web.delete('/api/index', api.handle_clean),
