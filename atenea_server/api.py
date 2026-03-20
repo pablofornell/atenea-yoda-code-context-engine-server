@@ -144,6 +144,14 @@ class AteneaAPI:
                 "count": len(chunks)
             })
         except Exception as e:
+            error_msg = str(e)
+            if "doesn't exist" in error_msg or "Not found" in error_msg:
+                logger.warning(f"Query failed: Collection {collection_name} does not exist.")
+                return web.json_response({
+                    "error": f"Collection '{collection_name}' not found. Please index it first using 'atenea index'.",
+                    "code": "collection_not_found"
+                }, status=404)
+            
             logger.error(f"Error querying: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
