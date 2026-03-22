@@ -1,6 +1,7 @@
 import httpx
 import os
 from typing import List, Optional, Tuple
+from enum import Enum
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,39 @@ class EmbeddingError(Exception):
     pass
 
 
+class EmbeddingTaskType(Enum):
+    """
+    Task types for asymmetric retrieval.
+
+    For models like nomic-embed-text, using different prefixes for documents
+    vs queries improves retrieval quality because the model can optimize
+    embeddings for each use case.
+    """
+    SEARCH_DOCUMENT = "search_document"  # For indexing documents
+    SEARCH_QUERY = "search_query"        # For search queries
+    CLUSTERING = "clustering"            # For clustering tasks
+    CLASSIFICATION = "classification"    # For classification tasks
+
+
+# Prefix templates for different models
+# nomic-embed-text uses these specific prefixes
+MODEL_PREFIXES = {
+    "nomic-embed-text": {
+        EmbeddingTaskType.SEARCH_DOCUMENT: "search_document: ",
+        EmbeddingTaskType.SEARCH_QUERY: "search_query: ",
+        EmbeddingTaskType.CLUSTERING: "clustering: ",
+        EmbeddingTaskType.CLASSIFICATION: "classification: ",
+    },
+    # Add other models as needed
+    "default": {
+        EmbeddingTaskType.SEARCH_DOCUMENT: "",
+        EmbeddingTaskType.SEARCH_QUERY: "",
+        EmbeddingTaskType.CLUSTERING: "",
+        EmbeddingTaskType.CLASSIFICATION: "",
+    }
+}
+
+
 class Embedder:
     def __init__(
         self,
@@ -26,7 +60,22 @@ class Embedder:
         self.base_url = f"{ollama_url}/api/embed"
         self._dimension: Optional[int] = None
 
-    async def embed(self, texts: List[str], raise_on_error: bool = True) -> List[List[float]]:
+        # Get prefix configuration for this model
+        self._prefixes = MODEL_PREFIXES.get(self.model, MODEL_PREFIXES["default"])
+
+    def _apply_prefix(self, texts: List[str], task_type: EmbeddingTaskType) -> List[str]:
+        """Apply task-specific prefix to texts for asymmetric retrieval."""
+        prefix = self._prefixes.get(task_type, "")
+        if not prefix:
+            return texts
+        return [f"{prefix}{text}" for text in texts]
+
+    async def embed(
+        self,
+        texts: List[str],
+        raise_on_error: bool = True,
+        task_type: EmbeddingTaskType = EmbeddingTaskType.SEARCH_DOCUMENT
+    ) -> List[List[float]]:
         """
         Generate embeddings for the given texts.
 
@@ -34,6 +83,8 @@ class Embedder:
             texts: List of text strings to embed
             raise_on_error: If True, raises EmbeddingError on failure.
                           If False, returns empty list on failure.
+            task_type: The embedding task type for asymmetric retrieval.
+                      Use SEARCH_DOCUMENT when indexing, SEARCH_QUERY when querying.
 
         Returns:
             List of embedding vectors
@@ -44,13 +95,16 @@ class Embedder:
         if not texts:
             return []
 
+        # Apply task-specific prefix for asymmetric retrieval
+        prefixed_texts = self._apply_prefix(texts, task_type)
+
         async with httpx.AsyncClient(timeout=120.0) as client:
             try:
                 response = await client.post(
                     self.base_url,
                     json={
                         "model": self.model,
-                        "input": texts
+                        "input": prefixed_texts
                     }
                 )
                 if response.status_code != 200:
@@ -90,13 +144,19 @@ class Embedder:
                     raise EmbeddingError(error_msg) from e
                 return []
 
-    async def embed_with_fallback(self, texts: List[str], max_retries: int = 2) -> Tuple[List[List[float]], List[int]]:
+    async def embed_with_fallback(
+        self,
+        texts: List[str],
+        max_retries: int = 2,
+        task_type: EmbeddingTaskType = EmbeddingTaskType.SEARCH_DOCUMENT
+    ) -> Tuple[List[List[float]], List[int]]:
         """
         Embed texts with retry logic. Returns successful embeddings and indices of failed texts.
 
         Args:
             texts: List of text strings to embed
             max_retries: Number of retry attempts for failed batches
+            task_type: The embedding task type for asymmetric retrieval.
 
         Returns:
             Tuple of (embeddings, failed_indices) where failed_indices contains
@@ -110,7 +170,7 @@ class Embedder:
 
         for attempt in range(max_retries + 1):
             try:
-                result = await self.embed(texts, raise_on_error=True)
+                result = await self.embed(texts, raise_on_error=True, task_type=task_type)
                 return result, []
             except EmbeddingError as e:
                 if attempt < max_retries:
@@ -122,3 +182,36 @@ class Embedder:
                     return [], failed_indices
 
         return embeddings, failed_indices
+
+    async def embed_query(self, query: str, raise_on_error: bool = False) -> Optional[List[float]]:
+        """
+        Convenience method to embed a single query for search.
+
+        Args:
+            query: The search query text
+            raise_on_error: If True, raises EmbeddingError on failure
+
+        Returns:
+            Embedding vector or None on failure
+        """
+        result = await self.embed([query], raise_on_error=raise_on_error,
+                                  task_type=EmbeddingTaskType.SEARCH_QUERY)
+        return result[0] if result else None
+
+    async def embed_documents(
+        self,
+        documents: List[str],
+        raise_on_error: bool = True
+    ) -> List[List[float]]:
+        """
+        Convenience method to embed documents for indexing.
+
+        Args:
+            documents: List of document texts to embed
+            raise_on_error: If True, raises EmbeddingError on failure
+
+        Returns:
+            List of embedding vectors
+        """
+        return await self.embed(documents, raise_on_error=raise_on_error,
+                               task_type=EmbeddingTaskType.SEARCH_DOCUMENT)

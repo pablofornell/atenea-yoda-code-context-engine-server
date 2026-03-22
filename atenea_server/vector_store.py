@@ -61,17 +61,29 @@ class VectorStore:
             # Retrieve content_hash from chunk if available
             c_hash = getattr(chunk, 'content_hash', content_hash)
 
+            # Build payload with enhanced metadata
+            payload = {
+                "file_path": chunk.file_path,
+                "start_line": chunk.start_line,
+                "end_line": chunk.end_line,
+                "content": chunk.content,
+                "language": chunk.language,
+                "content_hash": c_hash,
+                # Enhanced metadata for better retrieval
+                "symbol_name": getattr(chunk, 'symbol_name', None),
+                "symbol_type": getattr(chunk, 'symbol_type', None),
+                "parent_context": getattr(chunk, 'parent_context', None),
+                "parent_symbols": getattr(chunk, 'parent_symbols', []),
+                "docstring": getattr(chunk, 'docstring', None),
+            }
+
+            # Remove None values to save space
+            payload = {k: v for k, v in payload.items() if v is not None}
+
             points.append(models.PointStruct(
                 id=point_id,
                 vector=embedding,
-                payload={
-                    "file_path": chunk.file_path,
-                    "start_line": chunk.start_line,
-                    "end_line": chunk.end_line,
-                    "content": chunk.content,
-                    "language": chunk.language,
-                    "content_hash": c_hash
-                }
+                payload=payload
             ))
 
         try:

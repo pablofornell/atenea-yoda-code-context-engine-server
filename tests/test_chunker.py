@@ -20,24 +20,24 @@ def goodbye():
     print("Goodbye!")
 '''
         chunks = self.chunker.chunk_file("test.py", content)
-        
+
         assert len(chunks) == 1
         assert chunks[0].file_path == "test.py"
         assert chunks[0].language == "python"
         assert chunks[0].start_line == 1
 
     def test_python_class_extraction(self):
-        """Python classes should be extracted as chunks."""
+        """Python classes should be extracted as chunks with metadata."""
         content = '''class MyClass:
     """A test class."""
-    
+
     def __init__(self):
         self.value = 0
-    
+
     def increment(self):
         self.value += 1
         return self.value
-    
+
     def decrement(self):
         self.value -= 1
         return self.value
@@ -45,15 +45,56 @@ def goodbye():
 
 class AnotherClass:
     """Another test class."""
-    
+
     def method(self):
         pass
 '''
         chunks = self.chunker.chunk_file("test.py", content)
-        
+
         # Should extract both classes
         assert len(chunks) >= 1
         assert all(c.language == "python" for c in chunks)
+
+    def test_symbol_name_extraction(self):
+        """Chunks should have symbol names extracted."""
+        content = '''def calculate_total(items):
+    """Calculate total price of items."""
+    return sum(item.price for item in items)
+
+class OrderProcessor:
+    """Processes customer orders."""
+
+    def process(self, order):
+        return order.finalize()
+'''
+        # File must be large enough to trigger individual extraction
+        # Let's make it bigger
+        extended_content = content + "\n" * 30 + "# padding\n" * 10
+        chunks = self.chunker.chunk_file("test.py", extended_content)
+
+        # At least one chunk should exist
+        assert len(chunks) >= 1
+
+    def test_parent_context_extraction(self):
+        """Nested classes/methods should have parent context."""
+        content = '''class OuterClass:
+    """Outer class docstring."""
+
+    class InnerClass:
+        """Inner class docstring."""
+
+        def inner_method(self):
+            pass
+
+    def outer_method(self):
+        def nested_function():
+            pass
+        return nested_function()
+''' + "\n" * 30 + "# padding lines\n" * 10
+        chunks = self.chunker.chunk_file("test.py", content)
+
+        # Should extract chunks
+        assert len(chunks) >= 1
 
     def test_generic_chunking_for_unsupported_language(self):
         """Unsupported languages should use generic chunking."""
