@@ -3,6 +3,7 @@ import asyncio
 from typing import List, Set, Tuple
 
 from .chunker import Chunker, Chunk
+from .constants import IGNORED_DIRS, BINARY_EXTS, IGNORED_FILES
 from .embedder import Embedder, EmbeddingError
 from .vector_store import VectorStore
 from .logging_config import get_logger
@@ -14,22 +15,9 @@ class Indexer:
         self.chunker = chunker
         self.embedder = embedder
         self.vector_store = vector_store
-        self.ignored_dirs = {
-            ".git", "build", "node_modules", ".gradle", ".venv", "venv", 
-            ".idea", "bin", "obj", "out", "metadata", ".next", "dist", 
-            "target", "__pycache__", ".vscode", ".pytest_cache", ".mypy_cache"
-        }
-        self.binary_exts = {
-            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", 
-            ".exe", ".dll", ".so", ".bin", ".jar", ".class", ".aar", ".xcf",
-            ".svg", ".ttf", ".otf", ".woff", ".woff2", ".7z", ".tar", ".gz",
-            ".dmg", ".iso", ".sqlite"
-        }
-        self.ignored_files = {
-            "gradlew", "gradlew.bat", 
-            ".gitignore", "gradle.properties", "settings.gradle", "package-lock.json",
-            "yarn.lock", "pnpm-lock.yaml", ".DS_Store"
-        }
+        self.ignored_dirs = IGNORED_DIRS
+        self.binary_exts = BINARY_EXTS
+        self.ignored_files = IGNORED_FILES
 
     async def index_directory(self, root_path: str):
         logger.info(f"Indexing directory: {root_path}")
@@ -71,10 +59,9 @@ class Indexer:
         batch_size = 50
         semaphore = asyncio.Semaphore(2)  # Limit concurrency to avoid overloading Ollama
         failed_chunks: List[Tuple[int, str]] = []  # (batch_idx, error_message)
-        successful_chunks = 0
 
-        async def process_batch(batch_idx: int, batch_chunks: List[Chunk]) -> bool:
-            nonlocal successful_chunks
+        async def process_batch(batch_idx: int, batch_chunks: List[Chunk]) -> int:
+            """Process a batch and return the number of successfully indexed chunks."""
             async with semaphore:
                 contents = [c.content for c in batch_chunks]
                 try:
@@ -91,27 +78,28 @@ class Indexer:
 
                         if successful_embeddings:
                             self.vector_store.upsert_chunks(successful_batch_chunks, successful_embeddings)
-                            successful_chunks += len(successful_batch_chunks)
 
                         failed_chunks.append((batch_idx, f"{len(failed_indices)} chunks failed"))
                         logger.warning(f"Batch {batch_idx + 1}: {len(failed_indices)} chunks skipped due to embedding errors")
+                        count = len(successful_batch_chunks)
                     else:
                         # All chunks succeeded
                         self.vector_store.upsert_chunks(batch_chunks, embeddings)
-                        successful_chunks += len(batch_chunks)
+                        count = len(batch_chunks)
 
                     logger.info(f"Indexed batch {batch_idx + 1}/{len(batches)}...")
-                    return True
+                    return count
 
                 except EmbeddingError as e:
                     failed_chunks.append((batch_idx, str(e)))
                     logger.error(f"Batch {batch_idx + 1} failed completely: {e}")
-                    return False
+                    return 0
 
         batches = [all_chunks[i:i+batch_size] for i in range(0, len(all_chunks), batch_size)]
         tasks = [process_batch(i, batch) for i, batch in enumerate(batches)]
 
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
+        successful_chunks = sum(results)
 
         # Report results
         if failed_chunks:

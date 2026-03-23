@@ -22,6 +22,7 @@ class Chunk:
     parent_symbols: List[str] = field(default_factory=list)  # Hierarchy of parent symbols
     docstring: Optional[str] = None            # Extracted docstring if any
     imports_context: Optional[str] = None      # Related imports for context
+    content_hash: Optional[str] = None         # Hash of the source file content
 
 class Chunker:
     def __init__(self):

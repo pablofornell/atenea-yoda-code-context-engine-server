@@ -116,7 +116,7 @@ class AteneaAPI:
                     
                     file_chunks = self.chunker.chunk_file(path, content)
                     for chunk in file_chunks:
-                        setattr(chunk, 'content_hash', content_hash)
+                        chunk.content_hash = content_hash
                     current_batch_chunks.extend(file_chunks)
                 
                 if current_batch_chunks:
@@ -132,8 +132,8 @@ class AteneaAPI:
                     total_chunks += batch_indexed
                     logger.info(f"Indexed batch of {len(file_batch)} files ({batch_indexed} chunks) to {collection_name or 'default'}...")
 
-            # Invalidate BM25 index so it rebuilds on next query
-            self.retriever.invalidate_bm25_index(collection_name=collection_name)
+            # Invalidate FTS index so it rebuilds on next query
+            self.retriever.invalidate_fts_index(collection_name=collection_name)
 
             return web.json_response({
                 "status": "ok",
@@ -179,8 +179,8 @@ class AteneaAPI:
             data = await request.json() if request.has_body else {}
             collection_name = data.get("collection")
             self.vector_store.clear_collection(collection_name=collection_name)
-            # Also clear BM25 index
-            self.retriever.invalidate_bm25_index(collection_name=collection_name)
+            # Also clear FTS index
+            self.retriever.invalidate_fts_index(collection_name=collection_name)
             return web.json_response({"status": "ok", "message": f"Index {collection_name or 'default'} cleared"})
         except Exception as e:
             logger.error(f"Error clearing index: {e}")
@@ -198,8 +198,9 @@ def main():
         web.delete('/api/index', api.handle_clean),
     ])
     
+    host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 8080))
-    web.run_app(app, port=port)
+    web.run_app(app, host=host, port=port)
 
 if __name__ == "__main__":
     main()

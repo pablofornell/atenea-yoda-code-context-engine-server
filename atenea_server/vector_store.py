@@ -1,9 +1,14 @@
+import uuid
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from qdrant_client.http.exceptions import UnexpectedResponse
 from typing import List, Optional, Dict
 import logging
 import os
 from .chunker import Chunk
+
+# Namespace UUID for generating deterministic point IDs
+_ATENEA_NS = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +36,7 @@ class VectorStore:
     def _ensure_collection(self, collection_name: str) -> None:
         try:
             self.client.get_collection(collection_name)
-        except Exception:
+        except UnexpectedResponse:
             # Create collection if it doesn't exist
             self.client.create_collection(
                 collection_name=collection_name,
@@ -53,13 +58,12 @@ class VectorStore:
 
         points = []
         for chunk, embedding in zip(chunks, embeddings):
-            # Use stable ID (deterministic MD5 of path + lines)
+            # Use stable deterministic UUID5 for point ID
             id_input = f"{chunk.file_path}:{chunk.start_line}:{chunk.end_line}"
-            from hashlib import md5
-            point_id = md5(id_input.encode()).hexdigest()
+            point_id = str(uuid.uuid5(_ATENEA_NS, id_input))
 
             # Retrieve content_hash from chunk if available
-            c_hash = getattr(chunk, 'content_hash', content_hash)
+            c_hash = chunk.content_hash or content_hash
 
             # Build payload with enhanced metadata
             payload = {
@@ -91,7 +95,7 @@ class VectorStore:
                 collection_name=collection_name,
                 points=points
             )
-        except Exception:
+        except UnexpectedResponse:
             # Collection may have been deleted externally; recreate and retry
             self._ensure_collection(collection_name)
             self.client.upsert(
@@ -114,8 +118,8 @@ class VectorStore:
         target = collection_name or self.default_collection
         try:
             self.client.delete_collection(target)
-        except Exception:
-            pass
+        except UnexpectedResponse:
+            pass  # Collection didn't exist, that's fine
         self._ensure_collection(target)
 
     def has_data(self, collection_name: Optional[str] = None) -> bool:
@@ -124,7 +128,7 @@ class VectorStore:
         try:
             res = self.client.count(collection_name=target, exact=True)
             return res.count > 0
-        except Exception:
+        except UnexpectedResponse:
             return False
 
     def get_file_hashes(self, collection_name: Optional[str] = None) -> Dict[str, str]:

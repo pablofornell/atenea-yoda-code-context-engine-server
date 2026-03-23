@@ -74,10 +74,7 @@ class Retriever:
         self._fts_initialized[target] = False
         self._fts_index.clear(collection=target)
 
-    # Keep old method name for backwards compatibility
-    def invalidate_bm25_index(self, collection_name: Optional[str] = None):
-        """Alias for invalidate_fts_index for backwards compatibility."""
-        self.invalidate_fts_index(collection_name)
+
 
     async def retrieve(
         self,

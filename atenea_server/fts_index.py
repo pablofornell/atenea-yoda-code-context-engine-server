@@ -14,8 +14,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Default database location
-DEFAULT_DB_PATH = os.environ.get("ATENEA_FTS_DB", "/tmp/atenea_fts.db")
+# Default database location - persist in user's home directory
+_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".atenea")
+DEFAULT_DB_PATH = os.environ.get("ATENEA_FTS_DB", os.path.join(_DEFAULT_DIR, "fts.db"))
 
 
 class FTSIndex:

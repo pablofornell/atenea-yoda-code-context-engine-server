@@ -59,6 +59,7 @@ class Embedder:
         ollama_url = base_url or os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL)
         self.base_url = f"{ollama_url}/api/embed"
         self._dimension: Optional[int] = None
+        self._client = httpx.AsyncClient(timeout=120.0)
 
         # Get prefix configuration for this model
         self._prefixes = MODEL_PREFIXES.get(self.model, MODEL_PREFIXES["default"])
@@ -98,51 +99,50 @@ class Embedder:
         # Apply task-specific prefix for asymmetric retrieval
         prefixed_texts = self._apply_prefix(texts, task_type)
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            try:
-                response = await client.post(
-                    self.base_url,
-                    json={
-                        "model": self.model,
-                        "input": prefixed_texts
-                    }
-                )
-                if response.status_code != 200:
-                    error_msg = f"Ollama error {response.status_code}: {response.text}"
-                    logger.error(error_msg)
-                    if raise_on_error:
-                        raise EmbeddingError(error_msg)
-                    return []
-
-                data = response.json()
-                embeddings = data["embeddings"]
-
-                # Cache dimension for validation
-                if embeddings and self._dimension is None:
-                    self._dimension = len(embeddings[0])
-
-                return embeddings
-
-            except httpx.TimeoutException as e:
-                error_msg = f"Ollama embedding timed out: {e}"
+        try:
+            response = await self._client.post(
+                self.base_url,
+                json={
+                    "model": self.model,
+                    "input": prefixed_texts
+                }
+            )
+            if response.status_code != 200:
+                error_msg = f"Ollama error {response.status_code}: {response.text}"
                 logger.error(error_msg)
                 if raise_on_error:
-                    raise EmbeddingError(error_msg) from e
+                    raise EmbeddingError(error_msg)
                 return []
 
-            except httpx.ConnectError as e:
-                error_msg = f"Could not connect to Ollama at {self.base_url}: {e}"
-                logger.error(error_msg)
-                if raise_on_error:
-                    raise EmbeddingError(error_msg) from e
-                return []
+            data = response.json()
+            embeddings = data["embeddings"]
 
-            except Exception as e:
-                error_msg = f"Ollama embedding failed ({type(e).__name__}): {e}"
-                logger.error(error_msg)
-                if raise_on_error:
-                    raise EmbeddingError(error_msg) from e
-                return []
+            # Cache dimension for validation
+            if embeddings and self._dimension is None:
+                self._dimension = len(embeddings[0])
+
+            return embeddings
+
+        except httpx.TimeoutException as e:
+            error_msg = f"Ollama embedding timed out: {e}"
+            logger.error(error_msg)
+            if raise_on_error:
+                raise EmbeddingError(error_msg) from e
+            return []
+
+        except httpx.ConnectError as e:
+            error_msg = f"Could not connect to Ollama at {self.base_url}: {e}"
+            logger.error(error_msg)
+            if raise_on_error:
+                raise EmbeddingError(error_msg) from e
+            return []
+
+        except Exception as e:
+            error_msg = f"Ollama embedding failed ({type(e).__name__}): {e}"
+            logger.error(error_msg)
+            if raise_on_error:
+                raise EmbeddingError(error_msg) from e
+            return []
 
     async def embed_with_fallback(
         self,
