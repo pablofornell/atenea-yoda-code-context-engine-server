@@ -41,12 +41,9 @@ async def encryption_middleware(request, handler):
             logger.error(f"Decryption failed: {e}")
             return web.json_response({"error": "Decryption failed"}, status=400)
 
-        # Replace the request payload so handlers see plain JSON
-        request._payload = asyncio.StreamReader()
-        request._payload.feed_data(decrypted)
-        request._payload.feed_eof()
-        # Reset cached read state so request.json() works
-        request._read_bytes = None
+        # Replace the cached read bytes so handlers see plain JSON
+        # (request.read() / request.json() check _read_bytes first)
+        request._read_bytes = decrypted
 
     # --- Call the actual handler ---
     response = await handler(request)
