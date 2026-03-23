@@ -23,5 +23,9 @@ This is the backend server for the Atenea Context Engine. It provides a REST API
    ```bash
    make run
    ```
+   Or if you want to run it on a different host:
+   ```bash
+   HOST=0.0.0.0 make run
+   ```
 
 The server will be available at `http://localhost:8080`.
