@@ -24,8 +24,7 @@ class TestFixOverflow:
     @pytest.mark.asyncio
     async def test_embedder_sub_batching(self):
         embedder = Embedder()
-        # Set a very low batch char limit for testing
-        # We need to monkeypatch the local variable in the method or just test with 25000 chars
+        # total chars = 30,000 (exceeds default 8,000)
         
         def side_effect(url, json=None, **kwargs):
             inputs = json.get("input", [])
@@ -37,11 +36,35 @@ class TestFixOverflow:
         embedder._client = AsyncMock()
         embedder._client.post = AsyncMock(side_effect=side_effect)
         
-        # total chars = 30,000 (exceeds default 25,000)
-        texts = ["a" * 10000, "b" * 10000, "c" * 10000]
+        texts = ["a" * 5000, "b" * 5000, "c" * 5000]
         
         embeddings = await embedder.embed(texts)
         
         assert len(embeddings) == 3
-        # Should have been called twice (one batch of 2, one batch of 1 or similar)
-        assert embedder._client.post.call_count >= 2
+        # Should have been called twice (one batch of 1, one batch of 1, one batch of 1)
+        # Because 5000+5000 > 8000
+        assert embedder._client.post.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_embedder_single_text_truncation(self):
+        embedder = Embedder()
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.1] * 768]}
+        
+        embedder._client = AsyncMock()
+        embedder._client.post = AsyncMock(return_value=mock_response)
+        
+        # Single text = 10,000 chars (exceeds 8,000)
+        texts = ["x" * 10000]
+        
+        embeddings = await embedder.embed(texts)
+        
+        assert len(embeddings) == 1
+        # Verify it was truncated before being sent
+        call_args = embedder._client.post.call_args
+        sent_input = call_args[1]["json"]["input"][0]
+        # "search_document: " is 18 chars
+        assert len(sent_input) <= 8000 + 18
+        assert "search_document: " + ("x" * 8000) == sent_input

@@ -85,35 +85,41 @@ class Embedder:
             return []
 
         # nomic-embed-text has context window of 8192 tokens.
-        # 1 token is roughly 4 chars. 25000 chars is ~6k tokens, providing a safe buffer.
-        max_batch_chars = 25000
+        # 1 token is roughly 4 chars. 10000 chars is ~2.5k tokens, providing a safe buffer.
+        max_batch_chars = 8000
         
         # Check if we need to split this request into smaller sub-batches
         total_chars = sum(len(t) for t in texts)
-        if total_chars > max_batch_chars and len(texts) > 1:
-            logger.info(f"Batch too large ({total_chars} chars), splitting into sub-batches...")
-            all_embeddings = []
-            current_sub_batch = []
-            current_chars = 0
-            
-            for text in texts:
-                text_len = len(text)
-                if current_chars + text_len > max_batch_chars and current_sub_batch:
-                    # Send current sub-batch
+        if total_chars > max_batch_chars:
+            if len(texts) == 1:
+                # Single text is too large - truncate it to avoid failing the whole batch
+                logger.warning(f"Single text too large ({len(texts[0])} chars), truncating to {max_batch_chars}...")
+                texts = [texts[0][:max_batch_chars]]
+                total_chars = max_batch_chars
+            else:
+                logger.info(f"Batch too large ({total_chars} chars), splitting into sub-batches...")
+                all_embeddings = []
+                current_sub_batch = []
+                current_chars = 0
+                
+                for text in texts:
+                    text_len = len(text)
+                    if current_chars + text_len > max_batch_chars and current_sub_batch:
+                        # Send current sub-batch
+                        embeddings = await self.embed(current_sub_batch, raise_on_error, task_type)
+                        all_embeddings.extend(embeddings)
+                        current_sub_batch = [text]
+                        current_chars = text_len
+                    else:
+                        current_sub_batch.append(text)
+                        current_chars += text_len
+                
+                # Send last sub-batch
+                if current_sub_batch:
                     embeddings = await self.embed(current_sub_batch, raise_on_error, task_type)
                     all_embeddings.extend(embeddings)
-                    current_sub_batch = [text]
-                    current_chars = text_len
-                else:
-                    current_sub_batch.append(text)
-                    current_chars += text_len
-            
-            # Send last sub-batch
-            if current_sub_batch:
-                embeddings = await self.embed(current_sub_batch, raise_on_error, task_type)
-                all_embeddings.extend(embeddings)
-                
-            return all_embeddings
+                    
+                return all_embeddings
 
         # Apply task-specific prefix for asymmetric retrieval
         prefixed_texts = self._apply_prefix(texts, task_type)

@@ -107,8 +107,8 @@ class Chunker:
         self.min_chunk_lines = 3
         # Maximum lines before we try to split further
         self.max_chunk_lines = 150
-        # Maximum characters before we try to split further (~3k-4k tokens)
-        self.max_chunk_chars = 15000
+        # Maximum characters before we try to split further (~1.5k-2k tokens)
+        self.max_chunk_chars = 6000
 
     def chunk_file(self, file_path: str, content: str) -> List[Chunk]:
         ext = file_path.split(".")[-1].lower()
