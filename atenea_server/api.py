@@ -168,7 +168,7 @@ class AteneaAPI:
                 
                 if current_batch_chunks:
                     # Further batch chunks for embedding if they are too many
-                    chunk_batch_size = 50
+                    chunk_batch_size = 20
                     tasks = []
                     for j in range(0, len(current_batch_chunks), chunk_batch_size):
                         chunk_batch = current_batch_chunks[j : j + chunk_batch_size]

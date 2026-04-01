@@ -56,7 +56,7 @@ class Indexer:
         logger.info(f"Found {len(all_chunks)} chunks. Generating embeddings...")
 
         # Batch processing with parallelism
-        batch_size = 50
+        batch_size = 20
         semaphore = asyncio.Semaphore(2)  # Limit concurrency to avoid overloading Ollama
         failed_chunks: List[Tuple[int, str]] = []  # (batch_idx, error_message)
 

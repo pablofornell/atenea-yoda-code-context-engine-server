@@ -107,6 +107,8 @@ class Chunker:
         self.min_chunk_lines = 3
         # Maximum lines before we try to split further
         self.max_chunk_lines = 150
+        # Maximum characters before we try to split further (~3k-4k tokens)
+        self.max_chunk_chars = 15000
 
     def chunk_file(self, file_path: str, content: str) -> List[Chunk]:
         ext = file_path.split(".")[-1].lower()
@@ -209,8 +211,8 @@ class Chunker:
             parent_context = ".".join(parent_symbols) if parent_symbols else None
             docstring = self._extract_docstring(node, lines)
 
-            # If chunk is too large, try to split it into smaller pieces
-            if len(node_lines) > self.max_chunk_lines:
+            # If chunk is too large (lines or characters), try to split it into smaller pieces
+            if len(node_lines) > self.max_chunk_lines or len(node_content) > self.max_chunk_chars:
                 sub_chunks = self._split_large_node(file_path, node, lines, language,
                                                     parent_symbols, imports_context)
                 chunks.extend(sub_chunks)
@@ -269,7 +271,9 @@ class Chunker:
             if node_lines >= self.min_chunk_lines:
                 significant.append(node)
                 # Don't recurse into children of small-medium nodes
-                if node_lines <= self.max_chunk_lines:
+                # But do recurse if characters exceed limit
+                node_content_len = node.end_byte - node.start_byte
+                if node_lines <= self.max_chunk_lines and node_content_len <= self.max_chunk_chars:
                     return significant
 
         # Recurse into children
@@ -279,7 +283,7 @@ class Chunker:
         return significant
 
     def _split_large_node(self, file_path: str, node: Node, lines: List[str],
-                          language: str, parent_symbols: List[str] = None,
+                          language: str, parent_symbols: Optional[List[str]] = None,
                           imports_context: Optional[str] = None) -> List[Chunk]:
         """Split a large node into smaller chunks based on its children."""
         chunks = []
@@ -390,16 +394,17 @@ class Chunker:
     def _generic_chunk_content(self, file_path: str, content: str, language: str,
                                 start_offset: int = 0,
                                 parent_context: Optional[str] = None,
-                                parent_symbols: List[str] = None,
+                                parent_symbols: Optional[List[str]] = None,
                                 imports_context: Optional[str] = None) -> List[Chunk]:
         """Generic chunking for a specific content section with semantic boundaries."""
         lines = content.splitlines()
-        chunk_size = 50
+        chunk_size = self.max_chunk_lines
         overlap = 5
         chunks = []
         parent_symbols = parent_symbols or []
+        content_len = len(content)
 
-        if len(lines) <= chunk_size:
+        if len(lines) <= chunk_size and content_len <= self.max_chunk_chars:
             return [Chunk(
                 file_path=file_path,
                 start_line=start_offset + 1,
@@ -415,7 +420,16 @@ class Chunker:
         while i < len(lines):
             # Find end of chunk, respecting semantic boundaries
             target_end = min(i + chunk_size, len(lines))
-            actual_end = self._find_semantic_boundary(lines, i, target_end, chunk_size)
+            
+            # Also respect character limit
+            actual_end_limit = target_end
+            while actual_end_limit > i + 1:
+                chunk_len = sum(len(lines[j]) + 1 for j in range(i, actual_end_limit))
+                if chunk_len <= self.max_chunk_chars:
+                    break
+                actual_end_limit -= 1
+            
+            actual_end = self._find_semantic_boundary(lines, i, actual_end_limit, chunk_size)
 
             chunk_content = "\n".join(lines[i:actual_end])
             chunks.append(Chunk(
@@ -533,23 +547,35 @@ class Chunker:
         current_indent = len(current_line) - len(current_line.lstrip())
 
         # Boundary if we've dedented back to or past the starting indent
-        return current_indent <= start_indent
+        return start_indent is not None and current_indent <= start_indent
 
     def _generic_chunk(self, file_path: str, content: str, language: str) -> List[Chunk]:
         """Line-based chunking with semantic boundary awareness."""
         lines = content.splitlines()
-        chunk_size = 50
+        chunk_size = self.max_chunk_lines
         overlap = 5
         chunks = []
 
         if len(lines) <= chunk_size:
-            chunks.append(Chunk(file_path, 1, len(lines), content, language))
-            return chunks
+            # Still check character limit for safety
+            if len(content) <= self.max_chunk_chars:
+                chunks.append(Chunk(file_path, 1, len(lines), content, language))
+                return chunks
+            # Else fall through to chunking loop
 
         i = 0
         while i < len(lines):
             target_end = min(i + chunk_size, len(lines))
-            actual_end = self._find_semantic_boundary(lines, i, target_end, chunk_size)
+            
+            # Also respect character limit
+            actual_end_limit = target_end
+            while actual_end_limit > i + 1:
+                chunk_len = sum(len(lines[j]) + 1 for j in range(i, actual_end_limit))
+                if chunk_len <= self.max_chunk_chars:
+                    break
+                actual_end_limit -= 1
+            
+            actual_end = self._find_semantic_boundary(lines, i, actual_end_limit, chunk_size)
 
             chunk_content = "\n".join(lines[i:actual_end])
             chunks.append(Chunk(

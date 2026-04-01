@@ -78,23 +78,42 @@ class Embedder:
         task_type: EmbeddingTaskType = EmbeddingTaskType.SEARCH_DOCUMENT
     ) -> List[List[float]]:
         """
-        Generate embeddings for the given texts.
-
-        Args:
-            texts: List of text strings to embed
-            raise_on_error: If True, raises EmbeddingError on failure.
-                          If False, returns empty list on failure.
-            task_type: The embedding task type for asymmetric retrieval.
-                      Use SEARCH_DOCUMENT when indexing, SEARCH_QUERY when querying.
-
-        Returns:
-            List of embedding vectors
-
-        Raises:
-            EmbeddingError: If embedding generation fails and raise_on_error is True
+        Generate embeddings for the given texts. Handles internal batching to avoid
+        exceeding model context length.
         """
         if not texts:
             return []
+
+        # nomic-embed-text has context window of 8192 tokens.
+        # 1 token is roughly 4 chars. 25000 chars is ~6k tokens, providing a safe buffer.
+        max_batch_chars = 25000
+        
+        # Check if we need to split this request into smaller sub-batches
+        total_chars = sum(len(t) for t in texts)
+        if total_chars > max_batch_chars and len(texts) > 1:
+            logger.info(f"Batch too large ({total_chars} chars), splitting into sub-batches...")
+            all_embeddings = []
+            current_sub_batch = []
+            current_chars = 0
+            
+            for text in texts:
+                text_len = len(text)
+                if current_chars + text_len > max_batch_chars and current_sub_batch:
+                    # Send current sub-batch
+                    embeddings = await self.embed(current_sub_batch, raise_on_error, task_type)
+                    all_embeddings.extend(embeddings)
+                    current_sub_batch = [text]
+                    current_chars = text_len
+                else:
+                    current_sub_batch.append(text)
+                    current_chars += text_len
+            
+            # Send last sub-batch
+            if current_sub_batch:
+                embeddings = await self.embed(current_sub_batch, raise_on_error, task_type)
+                all_embeddings.extend(embeddings)
+                
+            return all_embeddings
 
         # Apply task-specific prefix for asymmetric retrieval
         prefixed_texts = self._apply_prefix(texts, task_type)
@@ -110,12 +129,19 @@ class Embedder:
             if response.status_code != 200:
                 error_msg = f"Ollama error {response.status_code}: {response.text}"
                 logger.error(error_msg)
+                
+                # If we get a 400 and haven't split yet (only 1 text), we can't do much but fail
+                if response.status_code == 400 and "context length" in response.text.lower() and len(texts) == 1:
+                    logger.warning(f"Single text too large for Ollama context: {len(texts[0])} chars")
+                    # Truncate if it's a single massive text that can't be chunked further?
+                    # For now, just raise or return empty.
+                
                 if raise_on_error:
                     raise EmbeddingError(error_msg)
                 return []
 
             data = response.json()
-            embeddings = data["embeddings"]
+            embeddings = data.get("embeddings", [])
 
             # Cache dimension for validation
             if embeddings and self._dimension is None:
