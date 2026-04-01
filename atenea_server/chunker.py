@@ -107,7 +107,9 @@ class Chunker:
         self.min_chunk_lines = 3
         # Maximum lines before we try to split further
         self.max_chunk_lines = 150
-        # Maximum characters before we try to split further (~1.5k-2k tokens)
+        # Maximum characters before we try to split further.
+        # With num_ctx=8192 passed to Ollama, 6000 chars (~2000 tokens at ~3:1 ratio)
+        # fits comfortably in the model's context window.
         self.max_chunk_chars = 6000
 
     def chunk_file(self, file_path: str, content: str) -> List[Chunk]:

@@ -84,9 +84,11 @@ class Embedder:
         if not texts:
             return []
 
-        # nomic-embed-text has context window of 8192 tokens.
-        # 1 token is roughly 4 chars. 10000 chars is ~2.5k tokens, providing a safe buffer.
-        max_batch_chars = 8000
+        # nomic-embed-text has context window of 8192 tokens (~24k-32k chars).
+        # We batch multiple texts per request; keep total chars per request reasonable
+        # to avoid timeouts and memory spikes. Individual text limits are enforced
+        # by the chunker (max_chunk_chars) and by num_ctx passed to Ollama.
+        max_batch_chars = 20000
         
         # Check if we need to split this request into smaller sub-batches
         total_chars = sum(len(t) for t in texts)
@@ -129,7 +131,12 @@ class Embedder:
                 self.base_url,
                 json={
                     "model": self.model,
-                    "input": prefixed_texts
+                    "input": prefixed_texts,
+                    "options": {
+                        # Ollama defaults num_ctx to 2048, but nomic-embed-text
+                        # supports 8192. We must explicitly request the full window.
+                        "num_ctx": 8192
+                    }
                 }
             )
             if response.status_code != 200:

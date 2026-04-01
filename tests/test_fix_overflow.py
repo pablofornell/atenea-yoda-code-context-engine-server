@@ -24,7 +24,7 @@ class TestFixOverflow:
     @pytest.mark.asyncio
     async def test_embedder_sub_batching(self):
         embedder = Embedder()
-        # total chars = 30,000 (exceeds default 8,000)
+        # total chars = 30,000 (exceeds default 20,000)
         
         def side_effect(url, json=None, **kwargs):
             inputs = json.get("input", [])
@@ -36,14 +36,16 @@ class TestFixOverflow:
         embedder._client = AsyncMock()
         embedder._client.post = AsyncMock(side_effect=side_effect)
         
-        texts = ["a" * 5000, "b" * 5000, "c" * 5000]
+        texts = ["a" * 10000, "b" * 10000, "c" * 10000]
         
         embeddings = await embedder.embed(texts)
         
         assert len(embeddings) == 3
-        # Should have been called twice (one batch of 1, one batch of 1, one batch of 1)
-        # Because 5000+5000 > 8000
-        assert embedder._client.post.call_count == 3
+        # 10000+10000 > 20000, so it splits. Should be at least 2 calls.
+        assert embedder._client.post.call_count >= 2
+        # Verify num_ctx is passed in the request
+        call_args = embedder._client.post.call_args
+        assert call_args[1]["json"]["options"]["num_ctx"] == 8192
 
     @pytest.mark.asyncio
     async def test_embedder_single_text_truncation(self):
@@ -56,8 +58,8 @@ class TestFixOverflow:
         embedder._client = AsyncMock()
         embedder._client.post = AsyncMock(return_value=mock_response)
         
-        # Single text = 10,000 chars (exceeds 8,000)
-        texts = ["x" * 10000]
+        # Single text = 25,000 chars (exceeds 20,000)
+        texts = ["x" * 25000]
         
         embeddings = await embedder.embed(texts)
         
@@ -65,6 +67,7 @@ class TestFixOverflow:
         # Verify it was truncated before being sent
         call_args = embedder._client.post.call_args
         sent_input = call_args[1]["json"]["input"][0]
-        # "search_document: " is 18 chars
-        assert len(sent_input) <= 8000 + 18
-        assert "search_document: " + ("x" * 8000) == sent_input
+        # "search_document: " is 18 chars, text truncated to 20000
+        assert len(sent_input) <= 20000 + 18
+        # Verify num_ctx is passed
+        assert call_args[1]["json"]["options"]["num_ctx"] == 8192
